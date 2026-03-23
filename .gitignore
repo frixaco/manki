@@ -1,6 +1,15 @@
 # dependencies (bun install)
 node_modules
 
+# test decks (large binary files)
+*.apkg
+
+# output directories
+tmp_assess
+kaishi
+taekim
+pi-session*.html
+
 # output
 out
 dist
