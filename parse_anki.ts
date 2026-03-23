@@ -3,9 +3,6 @@ import { mkdir } from "fs/promises";
 import JSZip from "jszip";
 import { execSync } from "child_process";
 
-const DECK_PATH = "./Kaishi.1.5k.v2.3.apkg";
-const OUTPUT_DIR = "./parsed_deck";
-
 interface Note {
   id: number;
   guid: string;
@@ -49,6 +46,7 @@ async function parseApkg(deckPath: string, outputDir: string) {
   await mkdir(`${outputDir}/media`, { recursive: true });
   
   const zipFiles = zip.files;
+  const mediaFiles: { name: string; compressed: boolean }[] = [];
   
   for (const name of Object.keys(zipFiles)) {
     const file = zipFiles[name];
@@ -56,58 +54,105 @@ async function parseApkg(deckPath: string, outputDir: string) {
       const compressedData = await file.async("uint8array");
       const tmpPath = `/tmp/media_${name}_${Date.now()}.bin`;
       require("fs").writeFileSync(tmpPath, Buffer.from(compressedData));
-      execSync(`zstd -d "${tmpPath}" -o "${tmpPath}_decompressed"`);
-      const decompressed = require("fs").readFileSync(`${tmpPath}_decompressed`);
-      await Bun.write(`${outputDir}/media/${name}`, decompressed);
+      
+      const fileType = require("child_process").execSync(`file -b "${tmpPath}"`).toString();
+      
+      if (fileType.includes("Zstandard") || fileType.includes("zstd")) {
+        execSync(`zstd -d "${tmpPath}" -o "${tmpPath}_decompressed"`);
+        const decompressed = require("fs").readFileSync(`${tmpPath}_decompressed`);
+        await Bun.write(`${outputDir}/media/${name}`, decompressed);
+        require("fs").unlinkSync(`${tmpPath}_decompressed`);
+      } else {
+        await Bun.write(`${outputDir}/media/${name}`, compressedData);
+      }
       require("fs").unlinkSync(tmpPath);
-      require("fs").unlinkSync(`${tmpPath}_decompressed`);
     }
   }
   
-  const collectionAnki21b = zipFiles["collection.anki21b"];
   let db: Database;
+  let isNewFormat = false;
   
-  if (collectionAnki21b) {
+  const collectionAnki21 = zipFiles["collection.anki21"];
+  const collectionAnki21b = zipFiles["collection.anki21b"];
+  const collectionAnki2 = zipFiles["collection.anki2"];
+  
+  if (collectionAnki21) {
+    const data = await collectionAnki21.async("uint8array");
+    db = new Database(data);
+    isNewFormat = false;
+  } else if (collectionAnki21b) {
     const compressedData = await collectionAnki21b.async("uint8array");
     const tmpPath = `/tmp/collection_${Date.now()}.anki2`;
     require("fs").writeFileSync(tmpPath + ".zstd", Buffer.from(compressedData));
     execSync(`zstd -d "${tmpPath}.zstd" -o "${tmpPath}"`);
     db = new Database(tmpPath);
-  } else if (zipFiles["collection.anki2"]) {
-    const collectionData = await zipFiles["collection.anki2"].async("uint8array");
-    db = new Database(collectionData);
+    isNewFormat = true;
+  } else if (collectionAnki2) {
+    const data = await collectionAnki2.async("uint8array");
+    db = new Database(data);
+    isNewFormat = false;
   } else {
-    throw new Error("Invalid Anki deck: no collection.anki2 or collection.anki21b found");
+    throw new Error("Invalid Anki deck: no collection found");
   }
   
   const col = db.query("SELECT * FROM col").get() as any;
   const deckName = col?.name || "Unknown";
   
-  const notetypes = db.query("SELECT * FROM notetypes").all() as any[];
-  const templates = db.query("SELECT * FROM templates").all() as any[];
-  const fields = db.query("SELECT * FROM fields").all() as any[];
-  const decks = db.query("SELECT * FROM decks").all() as any[];
+  let models: Record<number, any> = {};
+  let decks: Record<number, any> = {};
+  let noteTypesMap: Record<number, NoteType> = {};
   
-  const noteTypesMap: Record<number, NoteType> = {};
-  for (const nt of notetypes) {
-    const ntFields = fields.filter(f => f.ntid === nt.id);
-    const ntTemplates = templates.filter(t => t.ntid === nt.id);
+  if (isNewFormat) {
+    const notetypes = db.query("SELECT * FROM notetypes").all() as any[];
+    const templates = db.query("SELECT * FROM templates").all() as any[];
+    const fields = db.query("SELECT * FROM fields").all() as any[];
+    const decksRows = db.query("SELECT * FROM decks").all() as any[];
     
-    noteTypesMap[nt.id] = {
-      id: nt.id,
-      name: nt.name,
-      fields: ntFields.map(f => f.name),
-      templates: ntTemplates.map(t => ({
+    for (const d of decksRows) {
+      decks[d.id] = d;
+    }
+    
+    for (const nt of notetypes) {
+      const ntFields = fields.filter((f: any) => f.ntid === nt.id);
+      const ntTemplates = templates.filter((t: any) => t.ntid === nt.id);
+      
+      noteTypesMap[nt.id] = {
+        id: nt.id,
+        name: nt.name,
+        fields: ntFields.map((f: any) => f.name),
+        templates: ntTemplates.map((t: any) => ({
+          name: t.name,
+          qfmt: t.qfmt,
+          afmt: t.afmt,
+        })),
+      };
+    }
+  } else {
+    const modelsRaw: Record<string, any> = JSON.parse(col?.models || "{}");
+    const decksRaw: Record<string, any> = JSON.parse(col?.decks || "{}");
+    
+    for (const [k, v] of Object.entries(modelsRaw)) {
+      models[parseInt(k)] = v;
+    }
+    for (const [k, v] of Object.entries(decksRaw)) {
+      decks[parseInt(k)] = v;
+    }
+    
+    for (const [id, m] of Object.entries(models)) {
+      const modelId = parseInt(id as string);
+      const fields = (m.flds as any[]).map((f: any) => f.name);
+      const templates = (m.tmpls as any[]).map((t: any) => ({
         name: t.name,
         qfmt: t.qfmt,
         afmt: t.afmt,
-      })),
-    };
-  }
-  
-  const decksMap: Record<number, any> = {};
-  for (const d of decks) {
-    decksMap[d.id] = d;
+      }));
+      noteTypesMap[modelId] = {
+        id: modelId,
+        name: m.name,
+        fields,
+        templates,
+      };
+    }
   }
   
   const notes = db.query("SELECT * FROM notes").all() as any[];
@@ -120,12 +165,27 @@ async function parseApkg(deckPath: string, outputDir: string) {
   
   const notesOutput: Note[] = [];
   for (const n of notes) {
-    const model = noteTypesMap[n.mid];
-    const fieldNames = model?.fields || [];
-    const fieldValues = n.flds.split("\x1f");
+    let fieldNames: string[] = [];
+    let fieldValues = n.flds.split("\x1f");
+    
+    if (isNewFormat) {
+      const model = noteTypesMap[n.mid];
+      fieldNames = model?.fields || [];
+    } else {
+      const model = models[n.mid];
+      fieldNames = model ? (model.flds as any[]).map((f: any) => f.name) : [];
+    }
+    
     const noteFields: Record<string, string> = {};
     for (let i = 0; i < fieldNames.length; i++) {
       noteFields[fieldNames[i] || `field_${i}`] = fieldValues[i] || "";
+    }
+    
+    let noteTypeName = "Unknown";
+    if (isNewFormat) {
+      noteTypeName = noteTypesMap[n.mid]?.name || "Unknown";
+    } else {
+      noteTypeName = models[n.mid]?.name || "Unknown";
     }
     
     notesOutput.push({
@@ -134,7 +194,7 @@ async function parseApkg(deckPath: string, outputDir: string) {
       fields: noteFields,
       tags: n.tags ? n.tags.split(" ").filter(Boolean) : [],
       noteTypeId: n.mid,
-      noteTypeName: model?.name || "Unknown",
+      noteTypeName,
       mod: n.mod,
     });
   }
@@ -142,17 +202,28 @@ async function parseApkg(deckPath: string, outputDir: string) {
   const cardsOutput: Card[] = [];
   for (const c of cards) {
     const note = notesMap[c.nid];
-    const model = noteTypesMap[note?.mid];
-    const tpls = model?.templates || [];
-    const fieldNames = model?.fields || [];
-    const fieldValues = (note?.flds || "").split("\x1f");
+    
+    let fieldNames: string[] = [];
+    let fieldValues = (note?.flds || "").split("\x1f");
+    let templates: any[] = [];
+    
+    if (isNewFormat) {
+      const model = noteTypesMap[note?.mid];
+      fieldNames = model?.fields || [];
+      templates = model?.templates || [];
+    } else {
+      const model = models[note?.mid];
+      fieldNames = model ? (model.flds as any[]).map((f: any) => f.name) : [];
+      templates = model?.tmpls || [];
+    }
+    
     const noteFields: Record<string, string> = {};
     for (let i = 0; i < fieldNames.length; i++) {
       noteFields[fieldNames[i] || `field_${i}`] = fieldValues[i] || "";
     }
     
     let front = "", back = "";
-    const tpl = tpls[c.ord];
+    const tpl = templates[c.ord];
     if (tpl) {
       front = tpl.qfmt || "";
       back = tpl.afmt || "";
@@ -166,7 +237,7 @@ async function parseApkg(deckPath: string, outputDir: string) {
       back = back.replace(/\{\{[^}]+\}\}/g, "");
     }
     
-    const deckName = decksMap[c.did]?.name || "Unknown";
+    const deckName = decks[c.did]?.name || "Unknown";
     
     cardsOutput.push({
       id: c.id,
@@ -200,4 +271,7 @@ async function parseApkg(deckPath: string, outputDir: string) {
   console.log(`Output: ${outputDir}/{meta,notes,cards,notetypes}.json`);
 }
 
-parseApkg(DECK_PATH, OUTPUT_DIR).catch(console.error);
+const deckPath = Bun.argv[2] || "./Kaishi.1.5k.v2.3.apkg";
+const outputDir = Bun.argv[3] || "./parsed_deck";
+
+parseApkg(deckPath, outputDir).catch(console.error);
