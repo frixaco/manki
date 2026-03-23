@@ -5,7 +5,6 @@ import JSZip from "jszip";
 
 const FIELD_SEPARATOR = "\x1f";
 const ZSTD_MAGIC = [0x28, 0xb5, 0x2f, 0xfd] as const;
-const DEFAULT_DECK_PATH = "./Kaishi.1.5k.v2.3.apkg";
 
 type JsonMap = Record<string, unknown>;
 
@@ -762,21 +761,3 @@ export async function parseApkg(
   }
 }
 
-async function main(): Promise<void> {
-  const deckPath = Bun.argv[2] || DEFAULT_DECK_PATH;
-  const outputDir = Bun.argv[3] || deriveDefaultOutputDir(deckPath);
-  const result = await parseApkg(deckPath, outputDir, { extractMedia: true });
-
-  console.log(`Parsed ${result.meta.notesCount} notes, ${result.meta.cardsCount} cards`);
-  console.log(`Decks: ${result.meta.deckNames.join(", ") || result.meta.name}`);
-  console.log(`Media: ${result.meta.mediaCount}`);
-  console.log(`Output: ${outputDir}/{meta,notes,cards,notetypes,media}.json`);
-  console.log(`Media extracted to ${outputDir}/media/`);
-}
-
-if (import.meta.main) {
-  main().catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
-}
