@@ -6,6 +6,7 @@ Purpose:
 - parse Anki export packages into JSON
 - extract media with original filenames
 - support legacy and newer Anki collection formats
+- explore a simpler Git-friendly deck source format in `new-deck-spec.md`
 
 ## Features
 
@@ -37,14 +38,14 @@ bun ./index.ts <deck.apkg> [output_dir]
 Examples:
 
 ```bash
-bun ./index.ts ./Kaishi.1.5k.v2.3.apkg
-bun ./index.ts ./Kaishi.1.5k.v2.3.apkg ./out/kaishi
+bun ./index.ts ./Kaishi-1.5k-v2.4.apkg
+bun ./index.ts ./Kaishi-1.5k-v2.4.apkg ./out/kaishi
 ```
 
 Default behavior:
 - if `output_dir` omitted, output goes to `./<deck filename without extension>/`
 - example:
-  - `./Kaishi.1.5k.v2.3.apkg` -> `./Kaishi.1.5k.v2.3/`
+  - `./Kaishi-1.5k-v2.4.apkg` -> `./Kaishi-1.5k-v2.4/`
 
 CLI writes:
 - `meta.json`
@@ -53,6 +54,19 @@ CLI writes:
 - `notetypes.json`
 - `media.json`
 - `media/` extracted assets
+
+## Deck Source Format draft
+
+`new-deck-spec.md` describes the draft DSF v1 design.
+
+Current direction:
+- notes own reusable fields
+- cards are front/back views over those fields
+- common card types stay small: `basic`, `basic-reversed`, `cloze`, `listening`, `custom`
+- imported Anki data is preserved under `source.anki` for lossless migration
+- raw Anki fields/templates/card metadata are kept separate from the clean authoring model
+
+The parser does not emit DSF yet.
 
 ## Library usage
 
@@ -122,8 +136,7 @@ Media manifest entries:
 
 ## Supported decks verified in repo
 
-- `Kaishi.1.5k.v2.3.apkg`
-- `Japanese_course_based_on_Tae_Kims_grammar_guide__anime.apkg`
+- `Kaishi-1.5k-v2.4.apkg`
 
 ## Dev
 
