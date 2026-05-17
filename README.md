@@ -7,6 +7,7 @@ Purpose:
 - extract media with original filenames
 - support legacy and newer Anki collection formats
 - explore a simpler Git-friendly deck source format in `new-deck-spec.md`
+- track broader Anki2 product requirements in `anki2-requirements.md`
 
 ## Features
 
